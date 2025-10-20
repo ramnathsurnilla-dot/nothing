@@ -273,38 +273,40 @@ function invalidateUserStatCaches(userId) {
 }
 
 function recordUser(userId, username) {
+    // Initialize tracking variables at the top level
+    let needsUpdate = false;
     const userIdString = userId.toString();
     const { sheet: usersSheet } = getUsersSheet();
     
-    // Check if user exists by manually fetching all data and converting to a map immediately
-    const usersMap = {};
-    const data = usersSheet.getDataRange().getValues(); // Get current raw data
-    
-    // Start from row 2 (index 1) to build a quick check map
-    for (let i = 1; i < data.length; i++) {
-        if (data[i][0]) {
-            usersMap[data[i][0].toString()] = data[i][1];
-        }
-    }
-    
-    const currentUsername = usersMap[userIdString];
-    let needsUpdate = false;
+    // Check if user exists using the current cached map (if available)
+    const users = getUsers();
+    const currentUsername = users.byId[userIdString];
 
     if (!currentUsername) {
-        // NEW USER: Use the basic appendRow and force update.
+        // --- NEW USER ---
+        // Append row to the mock _users sheet
         usersSheet.appendRow([userId, username]);
         needsUpdate = true;
     } else if (currentUsername !== username) {
-        // EXISTING USER with changed username: Find and update the specific row.
+        // --- EXISTING USER, USERNAME CHANGE ---
+        // Find the user's row to update their username (col B)
+        const data = usersSheet.getDataRange().getValues();
         for (let i = 1; i < data.length; i++) {
             if (data[i][0].toString() === userIdString) {
-                // Update the single cell [row][col] and the cache.
+                // Update the sheet data directly
                 usersSheet.getRange(i + 1, 2, 1, 1).setValues([[username]]); 
                 needsUpdate = true;
                 break;
             }
         }
     }
+    
+    // CRUCIAL: Invalidate and rebuild the user map immediately after any data change.
+    if (needsUpdate) {
+        cache.removeProperty('user_map');
+        getUsers(); // Forces synchronous map rebuild
+    }
+}
     
     // CRUCIAL: Immediately rebuild the user map after any change to ensure the next 
     // call (which is likely code submission) succeeds.
