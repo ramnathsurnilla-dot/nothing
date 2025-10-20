@@ -273,8 +273,8 @@ function invalidateUserStatCaches(userId) {
 }
 
 function recordUser(userId, username) {
-    // Initialize tracking variables at the top level
-    let needsUpdate = false;
+    // FIX: Initialize needsUpdate at the function's scope level (top)
+    let needsUpdate = false; 
     const userIdString = userId.toString();
     const { sheet: usersSheet } = getUsersSheet();
     
@@ -301,12 +301,18 @@ function recordUser(userId, username) {
         }
     }
     
+    // Line 313 (where the error occurred) is likely checking this variable:
+    if (needsUpdate) { 
+        cache.removeProperty('user_map');
+        getUsers(); // Forces synchronous map rebuild
+    }
+}
+    
     // CRUCIAL: Invalidate and rebuild the user map immediately after any data change.
     if (needsUpdate) {
         cache.removeProperty('user_map');
         getUsers(); // Forces synchronous map rebuild
     }
-}
     
     // CRUCIAL: Immediately rebuild the user map after any change to ensure the next 
     // call (which is likely code submission) succeeds.
