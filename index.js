@@ -301,36 +301,18 @@ function recordUser(userId, username) {
         }
     }
     
-    // Line 313 (where the error occurred) is likely checking this variable:
+    // This condition (which is line 312 or close to it in your log) 
+    // now safely accesses the needsUpdate variable.
     if (needsUpdate) { 
         cache.removeProperty('user_map');
         getUsers(); // Forces synchronous map rebuild
     }
 }
-    
-    // CRUCIAL: Invalidate and rebuild the user map immediately after any data change.
-    if (needsUpdate) {
-        cache.removeProperty('user_map');
-        getUsers(); // Forces synchronous map rebuild
-    }
-    
-    // CRUCIAL: Immediately rebuild the user map after any change to ensure the next 
-    // call (which is likely code submission) succeeds.
-    if (needsUpdate) {
-        cache.removeProperty('user_map');
-        getUsers(); 
-    }
 
     // 3. If new user, append the row
     if (isNewUser) {
         usersSheet.appendRow([userId, username]);
         needsUpdate = true;
-    }
-    
-    // 4. Force cache refresh so subsequent calls see the new/updated user.
-    if (needsUpdate) {
-        cache.removeProperty('user_map');
-        getUsers(); // Forces synchronous rebuild of map
     }
 
 function getUserState(userId) { const data = props.getProperty('userStates'); return data ? (JSON.parse(data)[userId] || null) : null; }
