@@ -9,6 +9,7 @@ const bodyParser = require('body-parser');
 const axios = require('axios');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 const creds = require('./credentials.json'); // Your service account credentials
+const { JWT } = require('google-auth-library');
 
 // --- Bot Configuration ---
 const telegramToken = '8012735434:AAFuPm2Wni1SEZsrka9UMF7D5j1Xba3bbm0';
@@ -53,20 +54,7 @@ const cache = new SimpleStore(); // Stores cached data from sheets to reduce API
 // =================== PART 2 of 6: Google Sheets Database Layer ===================
 // =================================================================================
 
-/**
- * Authenticates with the Google Sheets API using service account credentials.
- * This function must be called successfully once when the bot starts.
- */
-async function initializeAuth() {
-    try {
-        await doc.useServiceAccountAuth(creds);
-        await doc.loadInfo(); // Loads spreadsheet properties and worksheets
-        console.log(`Successfully connected to spreadsheet: "${doc.title}"`);
-    } catch (error) {
-        console.error("FATAL: Could not connect to Google Sheets.", error.message);
-        process.exit(1); // Stop the bot if it can't connect to its database
-    }
-}
+
 
 /**
  * Retrieves a worksheet by its title from the connected spreadsheet.
@@ -75,41 +63,55 @@ async function initializeAuth() {
  * @param {string[]} headers An array of strings for the header row if creating the sheet.
  * @returns {Promise<import('google-spreadsheet').GoogleSpreadsheetWorksheet>}
  */
-async function getSheetByName(title, headers) {
-    await doc.loadInfo(); // Refresh sheet info to prevent stale data
-    let sheet = doc.sheetsByTitle[title];
-    if (!sheet) {
-        console.log(`Worksheet "${title}" not found, creating...`);
-        sheet = await doc.addSheet({ title, headerValues: headers });
-    }
-    return sheet;
-}
+    async function initializeAuth() {
+        try {
+            // Initialize auth - JWT is the modern way to authenticate with service accounts
+            const serviceAccountAuth = new JWT({
+                email: creds.client_email,
+                key: creds.private_key,
+                scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+            });
 
 // =================================================================================
 // ====================== PART 3 of 6: Telegram API Wrappers =======================
 // =================================================================================
 
-/**
- * A generic function to send requests to the Telegram Bot API.
- * @param {string} method The API method name (e.g., 'sendMessage').
- * @param {object} payload The JSON payload for the API method.
- * @returns {Promise<object|null>} The result from the API, or null on failure.
- */
-async function apiRequest(method, payload) {
-    const url = `${TELEGRAM_API_URL}/${method}`;
-    try {
-        const response = await axios.post(url, payload, { validateStatus: null });
-        if (response.data.ok) {
-            return response.data.result;
+    async function initializeAuth() {
+        try {
+            // Initialize auth - JWT is the modern way to authenticate with service accounts
+            const serviceAccountAuth = new JWT({
+                email: creds.client_email,
+                key: creds.private_key,
+                scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+            });
+
+            // Pass the authentication object to the spreadsheet document
+            doc.useOAuth2Client(serviceAccountAuth);
+
+            await doc.loadInfo(); // Loads spreadsheet properties and worksheets
+            console.log(`Successfully connected to spreadsheet: "${doc.title}"`);
+        } catch (error) {
+            console.error("FATAL: Could not connect to Google Sheets.", error.message);
+            process.exit(1); // Stop the bot if it can't connect to its database
         }
-        // Log the error description from Telegram if the request was not 'ok'
-        console.error(`Telegram API Error (${method}): ${response.data.description}`);
-        return null;
-    } catch (e) {
-        console.error(`Network Exception during API call (${method}): ${e.message}`);
-        return null;
     }
-}
+
+    /**
+     * Retrieves a worksheet by its title from the connected spreadsheet.
+     * If the worksheet does not exist, it creates a new one with the specified headers.
+     * @param {string} title The title of the worksheet to find or create.
+     * @param {string[]} headers An array of strings for the header row if creating the sheet.
+     * @returns {Promise<import('google-spreadsheet').GoogleSpreadsheetWorksheet>}
+     */
+    async function getSheetByName(title, headers) {
+        await doc.loadInfo(); // Refresh sheet info to prevent stale data
+        let sheet = doc.sheetsByTitle[title];
+        if (!sheet) {
+            console.log(`Worksheet "${title}" not found, creating...`);
+            sheet = await doc.addSheet({ title, headerValues: headers });
+        }
+        return sheet;
+    }
 
 // Convenience functions that use the generic apiRequest
 async function sendText(chat_id, text, options = {}) { return apiRequest('sendMessage', { chat_id: String(chat_id), text, parse_mode: 'Markdown', ...options }); }
@@ -403,4 +405,4 @@ initializeAuth()
     })
     .catch(err => {
         console.error("Failed to start the bot:", err);
-    });
+    })
