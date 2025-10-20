@@ -76,7 +76,6 @@ class InMemorySheet {
     }
 
     getRange(row, col, numRows = 1, numCols) {
-        // Correctly handle numCols based on row 1 data length if not provided
         if (numCols === undefined) {
              numCols = this.getLastColumn();
         }
@@ -90,7 +89,7 @@ class InMemorySheet {
                     for(let j = 0; j < numCols; j++) {
                         const targetRow = row - 1 + i;
                         const targetCol = col - 1 + j;
-                        // Check if the target cell exists in the sheet's data array before setting
+                        // Check if the target cell exists and update if the input value is present
                         if (this.data[targetRow] && this.data[targetRow][targetCol] !== undefined && 
                             values[i] && values[i][j] !== undefined) {
                             this.data[targetRow][targetCol] = values[i][j];
@@ -118,12 +117,10 @@ const userSheets = {
 
 function getSheetByName(name) {
     if (!userSheets[name]) {
-        // Check if it's NOT a system sheet (starting with _)
-        if (!name.startsWith('_')) { 
-             // Creates the sheet with the name including the @
+        if (!name.startsWith('_')) {
              userSheets[name] = new InMemorySheet(name, SHEET_HEADERS);
         } else {
-            return null; // System sheet, but not yet defined in userSheets
+            return null;
         }
     }
     return userSheets[name];
@@ -148,7 +145,6 @@ async function apiRequest(method, payload) {
         if (resData.ok) {
             return resData.result;
         }
-        // Log the error but continue execution
         // Logger.log(`API Error (${method}): ${JSON.stringify(resData)}`);
         return null;
     } catch(e) {
@@ -172,7 +168,6 @@ async function deleteMessage(chat_id, message_id) {
 
 async function sendDocument(chat_id, document, caption = '') {
     // Note: Proper file upload requires 'form-data' in Node.js, this is a mock.
-    // Logger.log(`[MOCK] Sending document: ${document.name} to ${chat_id} with caption: ${caption}`);
     return sendText(chat_id, `[MOCK] Document ${document.name} sent with caption: ${caption}`);
 }
 
@@ -252,10 +247,11 @@ function getAdminChatId(forceLookup = false) {
 function getSheetByUserId(userId) {
     const username = findUsernameById(userId);
     if (!username) { return { sheet: null, headers: null }; }
-
-    let sheetName = username; // Uses the full @username string
+    
+    // Uses the full @username string as the sheet name
+    let sheetName = username; 
     let sheet = getSheetByName(sheetName); 
-
+    
     if (!sheet) { 
         return { sheet: null, headers: null }; 
     }
@@ -272,28 +268,24 @@ function invalidateUserStatCaches(userId) {
     keys.forEach(key => cache.removeProperty(key));
 }
 
+// FIX: Corrected recordUser to ensure needsUpdate is initialized and handles user changes/new users
 function recordUser(userId, username) {
-    // FIX: Initialize needsUpdate at the function's scope level (top)
     let needsUpdate = false; 
     const userIdString = userId.toString();
     const { sheet: usersSheet } = getUsersSheet();
     
-    // Check if user exists using the current cached map (if available)
     const users = getUsers();
     const currentUsername = users.byId[userIdString];
 
     if (!currentUsername) {
         // --- NEW USER ---
-        // Append row to the mock _users sheet
         usersSheet.appendRow([userId, username]);
         needsUpdate = true;
     } else if (currentUsername !== username) {
         // --- EXISTING USER, USERNAME CHANGE ---
-        // Find the user's row to update their username (col B)
         const data = usersSheet.getDataRange().getValues();
         for (let i = 1; i < data.length; i++) {
             if (data[i][0].toString() === userIdString) {
-                // Update the sheet data directly
                 usersSheet.getRange(i + 1, 2, 1, 1).setValues([[username]]); 
                 needsUpdate = true;
                 break;
@@ -301,23 +293,13 @@ function recordUser(userId, username) {
         }
     }
     
-    // This condition (which is line 312 or close to it in your log) 
-    // now safely accesses the needsUpdate variable.
+    // Ensure user map is rebuilt immediately for subsequent calls (e.g., getSheetByUserId)
     if (needsUpdate) { 
         cache.removeProperty('user_map');
-        getUsers(); // Forces synchronous map rebuild
+        getUsers(); 
     }
 }
 
-    // 3. If new user, append the row
-    if (isNewUser) {
-        usersSheet.appendRow([userId, username]);
-        needsUpdate = true;
-    }
-
-function getUserState(userId) { const data = props.getProperty('userStates'); return data ? (JSON.parse(data)[userId] || null) : null; }
-function setUserState(userId, state) { const data = props.getProperty('userStates') || '{}'; const states = JSON.parse(data); states[userId] = state; props.setProperty('userStates', JSON.stringify(states)); }
-function clearUserState(userId) { const data = props.getProperty('userStates'); if (!data) return; const states = JSON.parse(data); delete states[userId]; props.setProperty('userStates', JSON.stringify(states)); }
 
 function getTotalPaidForUser(userId) {
     const cacheKey = `payments_${userId}`;
@@ -967,6 +949,7 @@ async function handleCodeSubmission(chatId, text, userId, userState) {
 
     const { sheet } = getSheetByUserId(submissionUserId);
     if (!sheet) {
+      // This is the critical failure point if the sheet isn't created
       await editMessageText(chatId, loadingMessage.message_id, "❌ *Error*\nCould not find or create your data sheet. Please contact an admin.");
       return;
     }
@@ -981,6 +964,7 @@ async function handleCodeSubmission(chatId, text, userId, userState) {
         const batchId = new Date().getTime();
 
         const newRows = uniqueNewCodes.map(code => [code, userState.type, formattedTimestamp, "", batchId, "Pending", ""]);
+        // THIS IS THE SUCCESSFUL WRITE OPERATION
         sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, newRows[0].length).setValues(newRows);
         invalidateUserStatCaches(submissionUserId);
 
@@ -1085,7 +1069,7 @@ async function handleCallbackQuery(callbackQuery) {
     if (action === 'searchbatch') {
         setUserState(from.id, { action: 'awaiting_batch_id' });
         await editMessageText(chat.id, messageId, "🔍 *Search Batch*\n\nPlease send the Batch ID you want to find.", {
-            reply_markup: { inline_keyboard: [[{ text: "⬅️️ Back to Batch List", callback_data: 'backtobatches' }]]}
+            reply_markup: { inline_keyboard: [[{ text: "⬅️ Back to Batch List", callback_data: 'backtobatches' }]]}
         });
         return;
     }
@@ -1318,7 +1302,7 @@ async function handleQueuePriceInput(adminUserId, text, state) {
     if (forUser) {
         await startUserProcessingQueue(adminUserId, forUser, skippedIds);
     } else {
-        await startProcessingQueue(adminUserId, skippedIds);
+        await startProcessingQueue(adminChatId, skippedIds);
     }
 }
 
@@ -1464,7 +1448,6 @@ async function handlePayoutAddressInput(userId, chatId, text, state) {
         isValid = /^\d{8,10}$/.test(address);
     } else if (payoutMethod === 'usdt') {
         methodText = "USDT BEP20 Address";
-        // Basic check for a standard Ethereum address format (BEP20 uses it)
         isValid = /^0x[a-fA-F0-9]{40}$/.test(address);
     }
     if (!isValid) {
@@ -1788,7 +1771,7 @@ async function handleMarketCommand(chatId) {
 
 function getEnhancedMarketData() {
     const cacheKey = 'enhanced_market_data';
-    const cached = cache.getProperty(cacheKey);
+    const cached = cache.getProperty(CACHE_KEY);
     if (cached) {
         try {
             return JSON.parse(cached);
@@ -2052,7 +2035,8 @@ async function handleWebhookRequest(req, res) {
         const isAdmin = fromUsername === adminUsername;
 
         if (isAdmin) props.setProperty('adminChatId', from.id.toString());
-        recordUser(from.id, fromUsername);
+        // CRITICAL: recordUser now registers and updates cache before any sheet access
+        recordUser(from.id, fromUsername); 
 
         if (text.toLowerCase() === '/cancel') {
             clearUserState(from.id);
