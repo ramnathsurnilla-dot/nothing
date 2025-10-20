@@ -21,52 +21,67 @@ app.post(`/bot${process.env.TELEGRAM_TOKEN}`, (req, res) => {
 
 console.log("Bot server started...");
 
-// --- REGISTER COMMAND HANDLERS ---
+// --- REGISTER COMMANDS ---
 bot.onText(/\/start/, (msg) => handlers.handleStartCommand(bot, msg));
 bot.onText(/\/mybatches/, (msg) => handlers.handleMyBatchesCommand(bot, msg));
 bot.onText(/\/help/, (msg) => handlers.handleHelpCommand(bot, msg));
 bot.onText(/\/mydata/, (msg) => handlers.handleMyDataCommand(bot, msg));
 bot.onText(/\/reset/, (msg) => handlers.handleResetCommand(bot, msg));
 bot.onText(/\/profile/, (msg) => handlers.handleProfileCommand(bot, msg));
-// Note: /balance, /withdraw, and admin commands are not included in this build yet.
+bot.onText(/\/balance/, (msg) => handlers.handleBalanceCommand(bot, msg));
+bot.onText(/\/cancel/, (msg) => handlers.handleCancelCommand(bot, msg));
+bot.onText(/\/broadcast/, (msg) => handlers.handleBroadcastCommand(bot, msg));
 
 // --- MAIN MESSAGE HANDLER ---
 bot.on('message', async (msg) => {
     if (!msg.text || !msg.from || msg.text.startsWith('/')) return;
 
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const username = `@${msg.from.username}`;
+    const { id: userId, username } = msg.from;
+    const { id: chatId } = msg.chat;
     const text = msg.text.trim();
+    const userIdentifier = `@${username}`;
 
-    await sheets.recordUser(userId, username);
-
+    await sheets.recordUser(userId, userIdentifier);
     const state = handlers.userStates[userId];
-    if (state && state.action === 'submitting') {
-        return processCodeSubmission(chatId, userId, username, text, state);
-    }
 
-    const isSpecial = config.specialUserUsernames.includes(username);
-    const isAdmin = config.adminUsername === username;
-    const allowed = isAdmin || isSpecial ? config.VALID_CODE_TYPES : config.CODE_TYPES_ALL_USERS;
+    // Handle stateful actions (e.g., waiting for codes or broadcast message)
+    if (state) {
+        if (state.action === 'submitting') {
+            return processCodeSubmission(chatId, userId, userIdentifier, text, state);
+        }
+        if (state.action === 'awaiting_broadcast' && config.adminUsername === userIdentifier) {
+            delete handlers.userStates[userId]; // Clear state
+            const users = await sheets.getUsers();
+            bot.sendMessage(chatId, `📣 Broadcasting to ${Object.keys(users.byId).length} users...`);
+            for (const id in users.byId) {
+                if (id !== String(userId)) { // Don't send to admin
+                    try {
+                        await bot.sendMessage(id, text);
+                    } catch (error) {
+                        console.log(`Failed to send broadcast to user ${id}: ${error.message}`);
+                    }
+                }
+            }
+            return bot.sendMessage(chatId, "✅ Broadcast complete.");
+        }
+    }
     
-    if (allowed.map(t => t.toLowerCase()).includes(text.toLowerCase())) {
+    // Handle code type selection
+    if (config.VALID_CODE_TYPES.map(t => t.toLowerCase()).includes(text.toLowerCase())) {
         handlers.userStates[userId] = { action: 'submitting', type: text };
-        const message = `✅ *Selected: ${text}*\n\nNow, please send the codes. Each code should be on a new line.`;
-        return bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+        return bot.sendMessage(chatId, `✅ *Selected: ${text}*\n\nNow, please send the codes.`, { parse_mode: 'Markdown' });
     }
 
-    if (!isAdmin && config.adminChatId) {
-        const forwardMessage = `*Incoming Message from \`${username}\`*\n(ID: \`${userId}\`)\n\n${text}`;
+    // Forward to admin if no other action is matched
+    if (config.adminUsername !== userIdentifier && config.adminChatId) {
+        const forwardMessage = `*Incoming from \`${userIdentifier}\`* (ID: \`${userId}\`)\n\n${text}`;
         bot.sendMessage(config.adminChatId, forwardMessage, { parse_mode: 'Markdown' });
         bot.sendMessage(chatId, "✅ Your message has been sent to the admin.");
     }
 });
 
 // --- CALLBACK QUERY HANDLER ---
-bot.on('callback_query', (callbackQuery) => {
-    handleCallbackQuery(bot, callbackQuery);
-});
+bot.on('callback_query', (cbq) => handleCallbackQuery(bot, cbq));
 
 // --- LOGIC FOR SUBMISSION ---
 async function processCodeSubmission(chatId, userId, username, text, state) {
@@ -79,13 +94,10 @@ async function processCodeSubmission(chatId, userId, username, text, state) {
         if (result.acceptedCount > 0) userMessage += `✅ Accepted: *${result.acceptedCount}* new code(s).\n`;
         if (result.duplicateCodes.length > 0) userMessage += `🟡 Rejected *${result.duplicateCodes.length}* as duplicates.\n`;
         if (result.invalidFormatCodes.length > 0) userMessage += `🔴 Rejected *${result.invalidFormatCodes.length}* with invalid format.\n`;
-
         bot.editMessageText(userMessage, {
             chat_id: chatId, message_id: loadingMessage.message_id, parse_mode: 'Markdown',
             reply_markup: {
-                inline_keyboard: [[
-                    { text: "📝 Submit Different", callback_data: 'submitmore' }
-                ]]
+                inline_keyboard: [[{ text: "📝 Submit Different", callback_data: 'submitmore' }]]
             }
         });
     } catch (error) {
@@ -96,7 +108,5 @@ async function processCodeSubmission(chatId, userId, username, text, state) {
     delete handlers.userStates[userId];
 }
 
-// --- START THE SERVER ---
-app.listen(process.env.PORT || 3000, () => {
-    console.log(`Server is listening...`);
-});
+// --- START SERVER ---
+app.listen(process.env.PORT || 3000, () => console.log(`Server is listening...`));
