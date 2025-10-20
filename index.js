@@ -12,12 +12,12 @@ const CODE_TYPES_ALL_USERS = ['1000 Roblox', '800 Roblox', '400 Roblox', 'lol 57
 
 // Code types only visible to special users
 const CODE_TYPES_SPECIAL_USERS = [
-    'minecoin 330', 'lol 575', 'pc game pass', 'lol 100', 'ow 200',    
+    'minecoin 330', 'lol 575', 'pc game pass', 'lol 100', 'ow 200',
 ];
 
 const SHEET_HEADERS = ["Code", "Type", "Timestamp", "Price", "Batch ID", "Status", "Note"];
 const VALID_CODE_TYPES = [
-    "1000 Roblox", "800 Roblox", "400 Roblox", "ow 1k", "ow 200", 
+    "1000 Roblox", "800 Roblox", "400 Roblox", "ow 1k", "ow 200",
     "minecoin 330", "lol 575", "pc game pass", "lol 100",
 ];
 const CODE_PATTERN_REGEX = /^[a-zA-Z0-9-]{5,}$/;
@@ -76,6 +76,11 @@ class InMemorySheet {
     }
 
     getRange(row, col, numRows = 1, numCols) {
+        // Correctly handle numCols based on row 1 data length if not provided
+        if (numCols === undefined) {
+             numCols = this.getLastColumn();
+        }
+        
         const data = this.data.slice(row - 1, row - 1 + numRows).map(r => r.slice(col - 1, col - 1 + numCols));
         
         return {
@@ -85,7 +90,9 @@ class InMemorySheet {
                     for(let j = 0; j < numCols; j++) {
                         const targetRow = row - 1 + i;
                         const targetCol = col - 1 + j;
-                        if (this.data[targetRow] && values[i] && values[i][j] !== undefined) {
+                        // Check if the target cell exists in the sheet's data array before setting
+                        if (this.data[targetRow] && this.data[targetRow][targetCol] !== undefined && 
+                            values[i] && values[i][j] !== undefined) {
                             this.data[targetRow][targetCol] = values[i][j];
                         }
                     }
@@ -109,6 +116,7 @@ const userSheets = {
     '_master_log': new InMemorySheet('_master_log', ["UserID", "Username", "Code", "Type", "Timestamp", "Price", "Batch ID", "Status", "Note"]),
 };
 
+// FIX: Consolidated Sheet Creation Logic for new users
 function getSheetByName(name) {
     if (!userSheets[name]) {
         if (!name.startsWith('_')) {
@@ -240,14 +248,12 @@ function getAdminChatId(forceLookup = false) {
     return adminId;
 }
 
+// FIX: Simplified to rely solely on getSheetByName for creation/retrieval
 function getSheetByUserId(userId) {
     const username = findUsernameById(userId);
     if (!username) { return { sheet: null, headers: null }; }
     let sheet = getSheetByName(username);
-    if (!sheet) {
-        sheet = new InMemorySheet(username, SHEET_HEADERS);
-        userSheets[username] = sheet;
-    }
+    if (!sheet) { return { sheet: null, headers: null }; } // Should only happen for underscore sheets
     return { sheet, headers: getSheetHeaders(sheet) };
 }
 
@@ -1052,7 +1058,7 @@ async function handleCallbackQuery(callbackQuery) {
     if (action === 'searchbatch') {
         setUserState(from.id, { action: 'awaiting_batch_id' });
         await editMessageText(chat.id, messageId, "🔍 *Search Batch*\n\nPlease send the Batch ID you want to find.", {
-            reply_markup: { inline_keyboard: [[{ text: "⬅️ Back to Batch List", callback_data: 'backtobatches' }]]}
+            reply_markup: { inline_keyboard: [[{ text: "⬅️️ Back to Batch List", callback_data: 'backtobatches' }]]}
         });
         return;
     }
@@ -1431,6 +1437,7 @@ async function handlePayoutAddressInput(userId, chatId, text, state) {
         isValid = /^\d{8,10}$/.test(address);
     } else if (payoutMethod === 'usdt') {
         methodText = "USDT BEP20 Address";
+        // Basic check for a standard Ethereum address format (BEP20 uses it)
         isValid = /^0x[a-fA-F0-9]{40}$/.test(address);
     }
     if (!isValid) {
@@ -1525,22 +1532,28 @@ async function handleSummaryCommand(adminChatId, args) {
         await sendText(adminChatId, `ℹ️ User *\`${targetUsername}\`* has no data.`);
         return;
     }
-    const priceCol = headers['price'], codeCol = headers['code'];
-    if(!priceCol || !codeCol){
-      await sendText(adminChatId, `📊 Sheet for *\`${targetUsername}\`* is in an old format.`);
-      return;
+    const priceCol = headers['price'], codeCol = headers['code'], statusCol = headers['status'];
+    if(!priceCol || !codeCol || !statusCol){
+        await sendText(adminChatId, `📊 Sheet for *\`${targetUsername}\`* is in an old format.`);
+        return;
     }
     const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
-    let totalPayout = 0, pricedCodes = 0, unpricedCodes = 0;
+    let totalOwed = 0, pricedCodes = 0, unpricedCodes = 0;
     for (const row of data) {
         if (row[codeCol - 1]) {
             const price = parseFloat(row[priceCol - 1]);
-            if (!isNaN(price) && price > 0) { totalPayout += price; pricedCodes++; }
+            const status = (row[statusCol - 1] || '').toString().trim().toLowerCase();
+            if (!isNaN(price) && price > 0) { 
+                pricedCodes++; 
+                if (status !== 'paid') {
+                    totalOwed += price;
+                }
+            }
             else { unpricedCodes++; }
         }
     }
     const sheetLink = 'https://mock.link/to/spreadsheet'; // Mock URL
-    let message = `📊 *Summary for \`${targetUsername}\`*\n\n💰 *Total Payout:* \`${totalPayout.toFixed(2)}\`\n✅ *Priced Codes:* \`${pricedCodes}\`\n⏳ *Unpriced Codes:* \`${unpricedCodes}\`\n\n[View Sheet](${sheetLink})`;
+    let message = `📊 *Summary for \`${targetUsername}\`*\n\n💰 *Total Owed (Non-Paid):* \`$${totalOwed.toFixed(2)}\`\n✅ *Priced Codes:* \`${pricedCodes}\`\n⏳ *Unpriced Codes:* \`${unpricedCodes}\`\n\n[View Sheet](${sheetLink})`;
     await sendText(adminChatId, message, { disable_web_page_preview: true });
 }
 
@@ -1579,12 +1592,12 @@ async function handleSummaryAllCommand(adminChatId) {
             grandTotalPriced += userPriced;
             grandTotalUnpriced += userUnpriced;
             grandTotalOwed += userOwed;
-            userSummaryLines.push(`▫️ *\`${username}\`* - Owed: \`${userOwed.toFixed(2)}\`, Priced: \`${userPriced}\`, Unpriced: \`${userUnpriced}\``);
+            userSummaryLines.push(`▫️ *\`${username}\`* - Owed: \`$${userOwed.toFixed(2)}\`, Priced: \`${userPriced}\`, Unpriced: \`${userUnpriced}\``);
         }
     }
-    let message = `*📊 All Users Summary (Live Data)*\n\n*OVERALL TOTALS*\n💰 *Grand Total Owed:* \`${grandTotalOwed.toFixed(2)}\`\n✅ *Total Priced:* \`${grandTotalPriced}\`\n⏳ *Total Unpriced:* \`${grandTotalUnpriced}\`\n📈 *Total Submissions:* \`${grandTotalSubmissions}\`\n👥 *Total Users with Data:* \`${usersWithDataCount}\`\n\n*--- PER-USER BREAKDOWN ---*\n${userSummaryLines.join('\n')}`;
+    let message = `*📊 All Users Summary (Live Data)*\n\n*OVERALL TOTALS*\n💰 *Grand Total Owed:* \`$${grandTotalOwed.toFixed(2)}\`\n✅ *Total Priced:* \`${grandTotalPriced}\`\n⏳ *Total Unpriced:* \`${grandTotalUnpriced}\`\n📈 *Total Submissions:* \`${grandTotalSubmissions}\`\n👥 *Total Users with Data:* \`${usersWithDataCount}\`\n\n*--- PER-USER BREAKDOWN ---*\n${userSummaryLines.join('\n')}`;
     if (message.length > 4096) {
-        message = message.substring(0, 4000) + "\n\n... (message truncated due to length)";
+        message = message.substring(0, 4000) + "\n\n*... (message truncated due to length)*";
     }
     await editMessageText(adminChatId, loadingMessage.message_id, message);
 }
@@ -1600,7 +1613,7 @@ async function handleBroadcastCommand(adminChatId, messageText) {
     for (const userChatId of recipients) {
         if (userChatId.toString() !== adminChatId.toString()) {
             try {
-                if (await sendText(userChatId, "📣 *Message <:*\n\n" + messageText)) sentCount++; else failCount++;
+                if (await sendText(userChatId, "📣 *Message from Admin:*\n\n" + messageText)) sentCount++; else failCount++;
                 await Utilities.sleep(100);
             } catch(e) { failCount++; Logger.log(e); }
         }
