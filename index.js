@@ -118,10 +118,12 @@ const userSheets = {
 
 function getSheetByName(name) {
     if (!userSheets[name]) {
-        if (!name.startsWith('_')) {
+        // Check if it's NOT a system sheet (starting with _)
+        if (!name.startsWith('_')) { 
+             // Creates the sheet with the name including the @
              userSheets[name] = new InMemorySheet(name, SHEET_HEADERS);
         } else {
-            return null;
+            return null; // System sheet, but not yet defined in userSheets
         }
     }
     return userSheets[name];
@@ -276,23 +278,38 @@ function invalidateUserStatCaches(userId) {
 }
 
 function recordUser(userId, username) {
-    const users = getUsers();
-    const currentUsername = users.byId[userId.toString()];
-    if (!currentUsername) {
-      const { sheet: usersSheet } = getUsersSheet();
-      usersSheet.appendRow([userId, username]);
-      cache.removeProperty('user_map');
-    } else if (currentUsername !== username) {
-      const { sheet: usersSheet } = getUsersSheet();
-      const data = usersSheet.getDataRange().getValues();
-      for (let i = 1; i < data.length; i++) {
-        if (data[i][0].toString() === userId.toString()) {
-          data[i][1] = username;
-          usersSheet.getRange(i + 1, 2).setValues([[username]]);
-          cache.removeProperty('user_map');
-          break;
+    // 1. Force the system to use the sheet data directly first.
+    const { sheet: usersSheet } = getUsersSheet();
+    const userIdString = userId.toString();
+    const data = usersSheet.getDataRange().getValues();
+    
+    let isNewUser = true;
+    let needsUpdate = false;
+
+    // 2. Check existing rows (starting from row 2, index 1)
+    for (let i = 1; i < data.length; i++) {
+        if (data[i][0].toString() === userIdString) {
+            isNewUser = false;
+            // Check if username needs updating (e.g., if Telegram changed the case)
+            if (data[i][1] !== username) {
+                data[i][1] = username; // Update the in-memory data array
+                usersSheet.getRange(i + 1, 2).setValues([[username]]); // Update the mock sheet data directly
+                needsUpdate = true;
+            }
+            break;
         }
-      }
+    }
+
+    // 3. If new user, append the row
+    if (isNewUser) {
+        usersSheet.appendRow([userId, username]);
+        needsUpdate = true;
+    }
+    
+    // 4. Force cache refresh so subsequent calls see the new/updated user.
+    if (needsUpdate) {
+        cache.removeProperty('user_map');
+        getUsers(); // Forces synchronous rebuild of map
     }
 }
 
