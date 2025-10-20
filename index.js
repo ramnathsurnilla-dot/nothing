@@ -314,7 +314,6 @@ function recordUser(userId, username) {
         cache.removeProperty('user_map');
         getUsers(); 
     }
-}
 
     // 3. If new user, append the row
     if (isNewUser) {
