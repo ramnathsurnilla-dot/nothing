@@ -249,19 +249,14 @@ function getAdminChatId(forceLookup = false) {
     return adminId;
 }
 
-// --- Replacement for getSheetByUserId (Uses full @username for sheet name) ---
 function getSheetByUserId(userId) {
     const username = findUsernameById(userId);
     if (!username) { return { sheet: null, headers: null }; }
-    
-    // The sheet name is the full @username string.
-    let sheetName = username; 
-    
-    // Use the central function to retrieve or automatically create the sheet.
+
+    let sheetName = username; // Uses the full @username string
     let sheet = getSheetByName(sheetName); 
-    
+
     if (!sheet) { 
-        // This case indicates a system error (e.g., trying to get an underscore sheet)
         return { sheet: null, headers: null }; 
     }
     return { sheet, headers: getSheetHeaders(sheet) };
@@ -278,27 +273,46 @@ function invalidateUserStatCaches(userId) {
 }
 
 function recordUser(userId, username) {
-    // 1. Force the system to use the sheet data directly first.
-    const { sheet: usersSheet } = getUsersSheet();
     const userIdString = userId.toString();
-    const data = usersSheet.getDataRange().getValues();
+    const { sheet: usersSheet } = getUsersSheet();
     
-    let isNewUser = true;
-    let needsUpdate = false;
-
-    // 2. Check existing rows (starting from row 2, index 1)
+    // Check if user exists by manually fetching all data and converting to a map immediately
+    const usersMap = {};
+    const data = usersSheet.getDataRange().getValues(); // Get current raw data
+    
+    // Start from row 2 (index 1) to build a quick check map
     for (let i = 1; i < data.length; i++) {
-        if (data[i][0].toString() === userIdString) {
-            isNewUser = false;
-            // Check if username needs updating (e.g., if Telegram changed the case)
-            if (data[i][1] !== username) {
-                data[i][1] = username; // Update the in-memory data array
-                usersSheet.getRange(i + 1, 2).setValues([[username]]); // Update the mock sheet data directly
-                needsUpdate = true;
-            }
-            break;
+        if (data[i][0]) {
+            usersMap[data[i][0].toString()] = data[i][1];
         }
     }
+    
+    const currentUsername = usersMap[userIdString];
+    let needsUpdate = false;
+
+    if (!currentUsername) {
+        // NEW USER: Use the basic appendRow and force update.
+        usersSheet.appendRow([userId, username]);
+        needsUpdate = true;
+    } else if (currentUsername !== username) {
+        // EXISTING USER with changed username: Find and update the specific row.
+        for (let i = 1; i < data.length; i++) {
+            if (data[i][0].toString() === userIdString) {
+                // Update the single cell [row][col] and the cache.
+                usersSheet.getRange(i + 1, 2, 1, 1).setValues([[username]]); 
+                needsUpdate = true;
+                break;
+            }
+        }
+    }
+    
+    // CRUCIAL: Immediately rebuild the user map after any change to ensure the next 
+    // call (which is likely code submission) succeeds.
+    if (needsUpdate) {
+        cache.removeProperty('user_map');
+        getUsers(); 
+    }
+}
 
     // 3. If new user, append the row
     if (isNewUser) {
@@ -311,7 +325,6 @@ function recordUser(userId, username) {
         cache.removeProperty('user_map');
         getUsers(); // Forces synchronous rebuild of map
     }
-}
 
 function getUserState(userId) { const data = props.getProperty('userStates'); return data ? (JSON.parse(data)[userId] || null) : null; }
 function setUserState(userId, state) { const data = props.getProperty('userStates') || '{}'; const states = JSON.parse(data); states[userId] = state; props.setProperty('userStates', JSON.stringify(states)); }
