@@ -116,7 +116,6 @@ const userSheets = {
     '_master_log': new InMemorySheet('_master_log', ["UserID", "Username", "Code", "Type", "Timestamp", "Price", "Batch ID", "Status", "Note"]),
 };
 
-// FIX: Consolidated Sheet Creation Logic for new users
 function getSheetByName(name) {
     if (!userSheets[name]) {
         if (!name.startsWith('_')) {
@@ -248,12 +247,21 @@ function getAdminChatId(forceLookup = false) {
     return adminId;
 }
 
-// FIX: Simplified to rely solely on getSheetByName for creation/retrieval
+// --- Replacement for getSheetByUserId (Uses full @username for sheet name) ---
 function getSheetByUserId(userId) {
     const username = findUsernameById(userId);
     if (!username) { return { sheet: null, headers: null }; }
-    let sheet = getSheetByName(username);
-    if (!sheet) { return { sheet: null, headers: null }; } // Should only happen for underscore sheets
+    
+    // The sheet name is the full @username string.
+    let sheetName = username; 
+    
+    // Use the central function to retrieve or automatically create the sheet.
+    let sheet = getSheetByName(sheetName); 
+    
+    if (!sheet) { 
+        // This case indicates a system error (e.g., trying to get an underscore sheet)
+        return { sheet: null, headers: null }; 
+    }
     return { sheet, headers: getSheetHeaders(sheet) };
 }
 
