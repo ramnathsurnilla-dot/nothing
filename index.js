@@ -9,7 +9,6 @@ const bodyParser = require('body-parser');
 const axios = require('axios');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 const creds = require('./credentials.json'); // Your service account credentials
-const { JWT } = require('google-auth-library');
 
 // --- Bot Configuration ---
 const telegramToken = '8012735434:AAFuPm2Wni1SEZsrka9UMF7D5j1Xba3bbm0';
@@ -54,64 +53,56 @@ const cache = new SimpleStore(); // Stores cached data from sheets to reduce API
 // =================== PART 2 of 6: Google Sheets Database Layer ===================
 // =================================================================================
 
-
+/**
+ * Authenticates with the Google Sheets API using service account credentials.
+ * This should only be called ONCE at startup.
+ */
+async function initializeAuth() {
+    try {
+        // Use service account credentials directly
+        doc.useServiceAccountAuth(creds);
+        await doc.loadInfo(); // Loads spreadsheet properties and worksheets ONCE
+        console.log(`Successfully connected to spreadsheet: "${doc.title}"`);
+    } catch (error) {
+        console.error("FATAL: Could not connect to Google Sheets.", error.message);
+        process.exit(1); // Stop the bot if it can't connect to its database
+    }
+}
 
 /**
- * Retrieves a worksheet by its title from the connected spreadsheet.
- * If the worksheet does not exist, it creates a new one with the specified headers.
+ * Retrieves a worksheet by its title. Creates it if it doesn't exist.
  * @param {string} title The title of the worksheet to find or create.
  * @param {string[]} headers An array of strings for the header row if creating the sheet.
  * @returns {Promise<import('google-spreadsheet').GoogleSpreadsheetWorksheet>}
  */
-    async function initializeAuth() {
-        try {
-            // Initialize auth - JWT is the modern way to authenticate with service accounts
-            const serviceAccountAuth = new JWT({
-                email: creds.client_email,
-                key: creds.private_key,
-                scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-            });
+async function getSheetByName(title, headers) {
+    let sheet = doc.sheetsByTitle[title];
+    if (!sheet) {
+        console.log(`Worksheet "${title}" not found, creating...`);
+        sheet = await doc.addSheet({ title, headerValues: headers });
+    }
+    return sheet; // Returns the sheet object directly
+}
 
 // =================================================================================
 // ====================== PART 3 of 6: Telegram API Wrappers =======================
 // =================================================================================
 
-    async function initializeAuth() {
-        try {
-            // Initialize auth - JWT is the modern way to authenticate with service accounts
-            const serviceAccountAuth = new JWT({
-                email: creds.client_email,
-                key: creds.private_key,
-                scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-            });
-
-            // Pass the authentication object to the spreadsheet document
-            doc.useOAuth2Client(serviceAccountAuth);
-
-            await doc.loadInfo(); // Loads spreadsheet properties and worksheets
-            console.log(`Successfully connected to spreadsheet: "${doc.title}"`);
-        } catch (error) {
-            console.error("FATAL: Could not connect to Google Sheets.", error.message);
-            process.exit(1); // Stop the bot if it can't connect to its database
-        }
+/**
+ * Sends a raw request to the Telegram Bot API.
+ * @param {string} endpoint The Telegram API endpoint (e.g., 'sendMessage').
+ * @param {object} payload The data to send in the request body.
+ * @returns {Promise<object|null>} The result from the Telegram API or null on error.
+ */
+async function apiRequest(endpoint, payload) {
+    try {
+        const response = await axios.post(`${TELEGRAM_API_URL}/${endpoint}`, payload);
+        return response.data.result;
+    } catch (error) {
+        console.error(`Telegram API Error (${endpoint}):`, error.response ? error.response.data : error.message);
+        return null;
     }
-
-    /**
-     * Retrieves a worksheet by its title from the connected spreadsheet.
-     * If the worksheet does not exist, it creates a new one with the specified headers.
-     * @param {string} title The title of the worksheet to find or create.
-     * @param {string[]} headers An array of strings for the header row if creating the sheet.
-     * @returns {Promise<import('google-spreadsheet').GoogleSpreadsheetWorksheet>}
-     */
-    async function getSheetByName(title, headers) {
-        await doc.loadInfo(); // Refresh sheet info to prevent stale data
-        let sheet = doc.sheetsByTitle[title];
-        if (!sheet) {
-            console.log(`Worksheet "${title}" not found, creating...`);
-            sheet = await doc.addSheet({ title, headerValues: headers });
-        }
-        return sheet;
-    }
+}
 
 // Convenience functions that use the generic apiRequest
 async function sendText(chat_id, text, options = {}) { return apiRequest('sendMessage', { chat_id: String(chat_id), text, parse_mode: 'Markdown', ...options }); }
@@ -196,7 +187,7 @@ async function recordUser(userId, username) {
 async function getAllUserCodes(userId) {
     const username = findUsernameById(userId);
     if (!username) return new Set();
-    const { sheet } = await getSheetByName(username, USER_SHEET_HEADERS);
+    const sheet = await getSheetByName(username, USER_SHEET_HEADERS);
     if (!sheet) return new Set();
     const rows = await sheet.getRows();
     const codeSet = new Set();
@@ -237,10 +228,10 @@ async function handleBalanceCommand(chatId, userId) {
             .reduce((sum, row) => sum + (parseFloat(row.Amount) || 0), 0);
 
         const username = findUsernameById(userId);
-        const { sheet: userSheet } = await getSheetByName(username, USER_SHEET_HEADERS);
+        const userSheet = await getSheetByName(username, USER_SHEET_HEADERS);
         let totalOwed = 0;
         let unpricedCount = 0;
-        if(userSheet) {
+        if (userSheet) {
             const userRows = await userSheet.getRows();
             for (const row of userRows) {
                 if (row.Status && row.Status.toLowerCase() !== 'paid') {
@@ -253,7 +244,7 @@ async function handleBalanceCommand(chatId, userId) {
                 }
             }
         }
-        
+
         const netBalance = totalOwed - totalPaid;
         let message = `💰 *Your Withdrawable Balance:* \`$${netBalance.toFixed(2)}\`\n\n`;
         if (unpricedCount > 0) {
@@ -272,7 +263,7 @@ async function handleBalanceCommand(chatId, userId) {
  */
 async function handleCodeSubmission(chatId, text, userId, userState) {
     const loadingMessage = await sendText(chatId, "⏳ Validating codes and saving to the database...");
-    
+
     const submittedCodes = text.split('\n').map(l => l.trim()).filter(Boolean);
     const validFormatCodes = new Set(submittedCodes.filter(code => CODE_PATTERN_REGEX.test(code)));
 
@@ -287,7 +278,7 @@ async function handleCodeSubmission(chatId, text, userId, userState) {
 
         if (uniqueNewCodes.length > 0) {
             const username = findUsernameById(userId);
-            const { sheet } = await getSheetByName(username, USER_SHEET_HEADERS);
+            const sheet = await getSheetByName(username, USER_SHEET_HEADERS);
             if (!sheet) throw new Error("Could not find or create user sheet.");
 
             const batchId = new Date().getTime();
@@ -295,7 +286,7 @@ async function handleCodeSubmission(chatId, text, userId, userState) {
                 "Code": code, "Type": userState.type, "Timestamp": new Date().toISOString(),
                 "Price": "", "Batch ID": batchId, "Status": "Pending", "Note": ""
             }));
-            
+
             await sheet.addRows(newRows);
             let userMessage = `🎉 *Submission Complete!*\n\n✅ Accepted: *${uniqueNewCodes.length}* new '${userState.type}' code(s).`;
             await editMessageText(chatId, loadingMessage.message_id, userMessage);
@@ -405,4 +396,4 @@ initializeAuth()
     })
     .catch(err => {
         console.error("Failed to start the bot:", err);
-    })
+    });
